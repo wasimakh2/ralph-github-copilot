@@ -54,6 +54,15 @@ The system uses a modular architecture with reusable components in the `lib/` di
 ./install.sh uninstall
 ```
 
+**Windows / Git Bash:**
+```powershell
+# PowerShell (recommended)
+.\setup.ps1
+
+# OR Git Bash
+./install.sh
+```
+
 ### Setting Up a New Project
 ```bash
 # Create a new Ralph-managed project (run from anywhere)
@@ -152,9 +161,76 @@ Each loop iteration injects context via `build_loop_context()`:
 - Use `--continue` flag to maintain context across loops
 - Disable with `--no-continue` for isolated iterations
 
+### opencode Configuration (default provider)
+
+Ralph uses [opencode](https://opencode.ai) as its default AI provider:
+
+**Configuration Variables:**
+```bash
+AI_PROVIDER="opencode"          # Default; no need to set explicitly
+OPENCODE_MODEL=""                # provider/model, e.g. anthropic/claude-sonnet-4 (empty = opencode's own default)
+```
+
+**CLI Options:**
+- `--provider opencode` - Use opencode (default, can be omitted)
+- `--provider claude` - Use Claude Code instead
+- `--provider copilot` - Use GitHub Copilot instead
+
+**Usage Examples:**
+```bash
+# Default - no flag needed
+ralph --monitor
+
+# Explicit, with a specific model
+OPENCODE_MODEL="anthropic/claude-sonnet-4" ralph --monitor
+```
+
+**Prerequisites:**
+```bash
+npm install -g opencode-ai
+# or: curl -fsSL https://opencode.ai/install | bash
+```
+
+### GitHub Copilot Configuration
+
+Ralph supports GitHub Copilot CLI as an alternative AI provider:
+
+**Configuration Variables:**
+```bash
+AI_PROVIDER="copilot"           # Set Copilot as the default provider
+COPILOT_MODE="suggest"          # Mode: suggest (commands) or explain (code)
+COPILOT_TARGET_TYPE="shell"     # Target type: shell, git, or gh
+```
+
+**CLI Options:**
+- `--provider copilot` - Use GitHub Copilot instead of Claude
+- `--copilot-mode suggest|explain` - Set Copilot mode (default: suggest)
+- `--copilot-type shell|git|gh` - Set target type for suggest mode
+
+**Usage Examples:**
+```bash
+# Use Copilot for shell command suggestions
+ralph --provider copilot --copilot-mode suggest --copilot-type shell
+
+# Use Copilot to explain code
+ralph --provider copilot --copilot-mode explain
+
+# Use Copilot for git commands
+ralph --provider copilot --copilot-type git
+
+# Set via environment variable
+export AI_PROVIDER=copilot
+ralph --monitor
+```
+
+**Prerequisites:**
+1. Install GitHub CLI: https://cli.github.com/
+2. Authenticate: `gh auth login`
+3. Install Copilot extension: `gh extension install github/gh-copilot`
+
 ### Intelligent Exit Detection
 The loop automatically exits when it detects project completion through:
-- Multiple consecutive "done" signals from Claude Code
+- Multiple consecutive "done" signals from Claude Code or Copilot
 - Too many test-only loops indicating feature completeness
 - All items in @fix_plan.md marked as completed
 - Strong completion indicators in responses

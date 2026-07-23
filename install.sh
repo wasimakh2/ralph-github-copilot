@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Ralph for Claude Code - Global Installation Script
+# Ralph - Autonomous AI Development Loop - Global Installation Script
+# Supports: opencode (default), Claude Code, GitHub Copilot
 set -e
 
 # Configuration
@@ -57,8 +58,45 @@ check_dependencies() {
         exit 1
     fi
     
-    # Claude Code CLI will be downloaded automatically when first used
-    log "INFO" "Claude Code CLI (@anthropic-ai/claude-code) will be downloaded when first used."
+    # Check for AI providers
+    log "INFO" "Checking for AI providers..."
+    local providers_found=0
+    
+    # Claude Code CLI
+    if command -v claude &> /dev/null; then
+        log "SUCCESS" "Claude Code CLI found"
+        providers_found=$((providers_found + 1))
+    else
+        log "INFO" "Claude Code CLI not found - will be available via npx"
+    fi
+    
+    # GitHub Copilot CLI
+    if command -v gh &> /dev/null; then
+        if gh extension list 2>/dev/null | grep -q "copilot"; then
+            log "SUCCESS" "GitHub Copilot CLI extension found"
+            providers_found=$((providers_found + 1))
+        else
+            log "INFO" "GitHub CLI found but Copilot extension not installed"
+            log "INFO" "  To add Copilot: gh extension install github/gh-copilot"
+        fi
+    else
+        log "INFO" "GitHub CLI not found - Copilot provider unavailable"
+    fi
+
+    # opencode CLI (default provider)
+    if command -v opencode &> /dev/null; then
+        log "SUCCESS" "opencode CLI found"
+        providers_found=$((providers_found + 1))
+    else
+        log "INFO" "opencode CLI not found - install with: npm install -g opencode-ai"
+    fi
+
+    if [[ $providers_found -eq 0 ]]; then
+        log "WARN" "No AI providers found. Install at least one:"
+        echo "  opencode: npm install -g opencode-ai"
+        echo "  Claude Code: npm install -g @anthropic-ai/claude-code"
+        echo "  GitHub Copilot: gh extension install github/gh-copilot"
+    fi
     
     # Check tmux (optional)
     if ! command -v tmux &> /dev/null; then
@@ -78,6 +116,79 @@ create_install_dirs() {
     mkdir -p "$RALPH_HOME/lib"
 
     log "SUCCESS" "Directories created: $INSTALL_DIR, $RALPH_HOME"
+}
+
+# Create default config file
+create_default_config() {
+    local config_file="$RALPH_HOME/config"
+    
+    # Only create if it doesn't exist (preserve user customizations)
+    if [[ ! -f "$config_file" ]]; then
+        log "INFO" "Creating default configuration file..."
+        cat > "$config_file" << 'EOF'
+# Ralph Global Configuration
+# This file is sourced by ralph_loop.sh on startup
+# You can override these settings per-project by creating .ralph.conf in your project directory
+
+# =============================================================================
+# AI PROVIDER SETTINGS
+# =============================================================================
+
+# Default AI provider: claude, copilot, or opencode
+# Uncomment one of the lines below to override the default
+#AI_PROVIDER="claude"
+#AI_PROVIDER="copilot"
+
+# Default provider (opencode is the default if not set)
+AI_PROVIDER="${AI_PROVIDER:-opencode}"
+
+# =============================================================================
+# OPENCODE SETTINGS
+# =============================================================================
+
+# provider/model, e.g. anthropic/claude-sonnet-4; empty = opencode's own default
+OPENCODE_MODEL="${OPENCODE_MODEL:-}"
+
+# =============================================================================
+# GITHUB COPILOT SETTINGS
+# =============================================================================
+
+# Copilot mode: suggest or explain
+COPILOT_MODE="${COPILOT_MODE:-suggest}"
+
+# Target type for suggest mode: shell, git, or gh
+COPILOT_TARGET_TYPE="${COPILOT_TARGET_TYPE:-shell}"
+
+# =============================================================================
+# CLAUDE CODE SETTINGS
+# =============================================================================
+
+# Output format: json or text
+CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-json}"
+
+# Allowed tools (comma-separated)
+CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-Write,Bash(git *),Read}"
+
+# Enable session continuity
+CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-true}"
+
+# =============================================================================
+# EXECUTION SETTINGS
+# =============================================================================
+
+# Maximum API calls per hour
+MAX_CALLS_PER_HOUR="${MAX_CALLS_PER_HOUR:-100}"
+
+# Timeout in minutes for AI execution
+CLAUDE_TIMEOUT_MINUTES="${CLAUDE_TIMEOUT_MINUTES:-15}"
+
+# Show verbose progress during execution
+VERBOSE_PROGRESS="${VERBOSE_PROGRESS:-false}"
+EOF
+        log "SUCCESS" "Default config created at $config_file"
+    else
+        log "INFO" "Config file already exists, preserving user settings"
+    fi
 }
 
 # Install Ralph scripts
@@ -233,31 +344,39 @@ check_path() {
 
 # Main installation
 main() {
-    echo "🚀 Installing Ralph for Claude Code globally..."
+    echo "🚀 Installing Ralph - Autonomous AI Development Loop..."
+    echo "   Supports: opencode (default), Claude Code, GitHub Copilot"
     echo ""
     
     check_dependencies
     create_install_dirs
+    create_default_config
     install_scripts
     install_ralph_loop
     install_setup
     check_path
     
     echo ""
-    log "SUCCESS" "🎉 Ralph for Claude Code installed successfully!"
+    log "SUCCESS" "🎉 Ralph installed successfully!"
     echo ""
     echo "Global commands available:"
-    echo "  ralph --monitor          # Start Ralph with integrated monitoring"
-    echo "  ralph --help            # Show Ralph options"
-    echo "  ralph-setup my-project  # Create new Ralph project"
-    echo "  ralph-import prd.md     # Convert PRD to Ralph project"
-    echo "  ralph-monitor           # Manual monitoring dashboard"
+    echo "  ralph --monitor              # Start Ralph with integrated monitoring (opencode by default)"
+    echo "  ralph --provider claude      # Use Claude Code instead"
+    echo "  ralph --provider copilot     # Use GitHub Copilot instead"
+    echo "  ralph --list-providers       # Show available AI providers"
+    echo "  ralph --help                 # Show all Ralph options"
+    echo "  ralph-setup my-project       # Create new Ralph project"
+    echo "  ralph-import prd.md          # Convert PRD to Ralph project"
+    echo "  ralph-monitor                # Manual monitoring dashboard"
     echo ""
     echo "Quick start:"
     echo "  1. ralph-setup my-awesome-project"
     echo "  2. cd my-awesome-project"
     echo "  3. # Edit PROMPT.md with your requirements"
-    echo "  4. ralph --monitor"
+    echo "  4. ralph --monitor                    # Use opencode (default)"
+    echo "     OR"
+    echo "     ralph --monitor --provider claude  # Use Claude Code"
+    echo "     ralph --monitor --provider copilot # Use GitHub Copilot"
     echo ""
     
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

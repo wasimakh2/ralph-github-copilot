@@ -157,7 +157,7 @@ teardown() {
 @test "CLAUDE_OUTPUT_FORMAT defaults to json" {
     # Verify by checking the default in ralph_loop.sh via grep
     run grep 'CLAUDE_OUTPUT_FORMAT=' "${BATS_TEST_DIRNAME}/../../ralph_loop.sh"
-    [[ "$output" == *'"json"'* ]]
+    [[ "$output" == *"json"* ]]
 }
 
 @test "CLAUDE_ALLOWED_TOOLS has sensible defaults" {

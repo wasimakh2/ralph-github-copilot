@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Claude Code Ralph Loop with Rate Limiting and Documentation
-# Adaptation of the Ralph technique for Claude Code with usage management
+# Ralph Loop - Autonomous AI Development Loop
+# Supports multiple AI providers: Claude Code and GitHub Copilot
 
 set -e  # Exit on any error
 
@@ -10,28 +10,63 @@ SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 source "$SCRIPT_DIR/lib/date_utils.sh"
 source "$SCRIPT_DIR/lib/response_analyzer.sh"
 source "$SCRIPT_DIR/lib/circuit_breaker.sh"
+source "$SCRIPT_DIR/lib/ai_provider.sh"
+
+# =============================================================================
+# CONFIGURATION FILE SUPPORT
+# =============================================================================
+# Ralph looks for configuration in the following order (later overrides earlier):
+# 1. ~/.ralph/config (global defaults)
+# 2. .ralph.conf in current directory (project-specific)
+# 3. Environment variables
+# 4. Command-line flags
+
+load_config_file() {
+    local config_file=$1
+    if [[ -f "$config_file" ]]; then
+        # Source the config file (it should contain variable assignments)
+        # shellcheck source=/dev/null
+        source "$config_file"
+    fi
+}
+
+# Load global config
+load_config_file "$HOME/.ralph/config"
+
+# Load project-specific config
+load_config_file ".ralph.conf"
 
 # Configuration
-PROMPT_FILE="PROMPT.md"
-LOG_DIR="logs"
-DOCS_DIR="docs/generated"
-STATUS_FILE="status.json"
-PROGRESS_FILE="progress.json"
+PROMPT_FILE="${PROMPT_FILE:-PROMPT.md}"
+LOG_DIR="${LOG_DIR:-logs}"
+DOCS_DIR="${DOCS_DIR:-docs/generated}"
+STATUS_FILE="${STATUS_FILE:-status.json}"
+PROGRESS_FILE="${PROGRESS_FILE:-progress.json}"
 CLAUDE_CODE_CMD="claude"
-MAX_CALLS_PER_HOUR=100  # Adjust based on your plan
-VERBOSE_PROGRESS=false  # Default: no verbose progress updates
-CLAUDE_TIMEOUT_MINUTES=15  # Default: 15 minutes timeout for Claude Code execution
+MAX_CALLS_PER_HOUR="${MAX_CALLS_PER_HOUR:-100}"  # Adjust based on your plan
+VERBOSE_PROGRESS="${VERBOSE_PROGRESS:-false}"  # Default: no verbose progress updates
+CLAUDE_TIMEOUT_MINUTES="${CLAUDE_TIMEOUT_MINUTES:-15}"  # Default: 15 minutes timeout for AI execution
 SLEEP_DURATION=3600     # 1 hour in seconds
 CALL_COUNT_FILE=".call_count"
 TIMESTAMP_FILE=".last_reset"
 USE_TMUX=false
 
+# AI Provider configuration (supports: claude, copilot, opencode)
+# Can be set via config file, --provider flag, or AI_PROVIDER environment variable
+AI_PROVIDER="${AI_PROVIDER:-opencode}"
+
 # Modern Claude CLI configuration (Phase 1.1)
-CLAUDE_OUTPUT_FORMAT="json"              # Options: json, text
-CLAUDE_ALLOWED_TOOLS="Write,Bash(git *),Read"  # Comma-separated list of allowed tools
-CLAUDE_USE_CONTINUE=true                 # Enable session continuity
+CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-json}"              # Options: json, text
+CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-Write,Bash(git *),Read}"  # Comma-separated list of allowed tools
+CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-true}"                 # Enable session continuity
 CLAUDE_SESSION_FILE=".claude_session_id" # Session ID persistence file
 CLAUDE_MIN_VERSION="2.0.76"              # Minimum required Claude CLI version
+
+# GitHub Copilot CLI configuration
+# Mode: suggest (for shell/git/gh commands), explain (for code explanation)
+COPILOT_MODE="${COPILOT_MODE:-suggest}"
+# Target type for suggest mode: shell, git, or gh
+COPILOT_TARGET_TYPE="${COPILOT_TARGET_TYPE:-shell}"
 
 # Valid tool patterns for --allowed-tools validation
 # Tools can be exact matches or pattern matches with wildcards in parentheses
@@ -86,7 +121,8 @@ check_tmux_available() {
 
 # Setup tmux session with monitor
 setup_tmux_session() {
-    local session_name="ralph-$(date +%s)"
+    local session_name
+    session_name="ralph-$(date +%s)"
     local ralph_home="${RALPH_HOME:-$HOME/.ralph}"
     
     log_status "INFO" "Setting up tmux session: $session_name"
@@ -140,7 +176,8 @@ setup_tmux_session() {
 # Initialize call tracking
 init_call_tracking() {
     log_status "INFO" "DEBUG: Entered init_call_tracking..."
-    local current_hour=$(date +%Y%m%d%H)
+    local current_hour
+    current_hour=$(date +%Y%m%d%H)
     local last_reset_hour=""
 
     if [[ -f "$TIMESTAMP_FILE" ]]; then
@@ -169,7 +206,8 @@ init_call_tracking() {
 log_status() {
     local level=$1
     local message=$2
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local color=""
     
     case $level in
@@ -234,12 +272,15 @@ increment_call_counter() {
 
 # Wait for rate limit reset with countdown
 wait_for_reset() {
-    local calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
+    local calls_made
+    calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
     log_status "WARN" "Rate limit reached ($calls_made/$MAX_CALLS_PER_HOUR). Waiting for reset..."
-    
+
     # Calculate time until next hour
-    local current_minute=$(date +%M)
-    local current_second=$(date +%S)
+    local current_minute
+    current_minute=$(date +%M)
+    local current_second
+    current_second=$(date +%S)
     local wait_time=$(((60 - current_minute - 1) * 60 + (60 - current_second)))
     
     log_status "INFO" "Sleeping for $wait_time seconds until next hour..."
@@ -258,7 +299,7 @@ wait_for_reset() {
     
     # Reset counter
     echo "0" > "$CALL_COUNT_FILE"
-    echo "$(date +%Y%m%d%H)" > "$TIMESTAMP_FILE"
+    date +%Y%m%d%H > "$TIMESTAMP_FILE"
     log_status "SUCCESS" "Rate limit reset! Ready for new calls."
 }
 
@@ -270,8 +311,9 @@ should_exit_gracefully() {
         log_status "INFO" "DEBUG: No exit signals file found, continuing..." >&2
         return 1  # Don't exit, file doesn't exist
     fi
-    
-    local signals=$(cat "$EXIT_SIGNALS_FILE")
+
+    local signals
+    signals=$(cat "$EXIT_SIGNALS_FILE")
     log_status "INFO" "DEBUG: Exit signals content: $signals" >&2
     
     # Count recent signals (last 5 loops) - with error handling
@@ -310,8 +352,10 @@ should_exit_gracefully() {
     
     # 4. Check fix_plan.md for completion
     if [[ -f "@fix_plan.md" ]]; then
-        local total_items=$(grep -c "^- \[" "@fix_plan.md" 2>/dev/null)
-        local completed_items=$(grep -c "^- \[x\]" "@fix_plan.md" 2>/dev/null)
+        local total_items
+        total_items=$(grep -c "^- \[" "@fix_plan.md" 2>/dev/null)
+        local completed_items
+        completed_items=$(grep -c "^- \[x\]" "@fix_plan.md" 2>/dev/null)
         
         # Handle case where grep returns no matches (exit code 1)
         [[ -z "$total_items" ]] && total_items=0
@@ -338,7 +382,8 @@ should_exit_gracefully() {
 
 # Check Claude CLI version for compatibility with modern flags
 check_claude_version() {
-    local version=$($CLAUDE_CODE_CMD --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    local version
+    version=$($CLAUDE_CODE_CMD --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
     if [[ -z "$version" ]]; then
         log_status "WARN" "Cannot detect Claude CLI version, assuming compatible"
@@ -349,8 +394,8 @@ check_claude_version() {
     local required="$CLAUDE_MIN_VERSION"
 
     # Convert to comparable integers (major * 10000 + minor * 100 + patch)
-    local ver_parts=(${version//./ })
-    local req_parts=(${required//./ })
+    local ver_parts=("${version//./ }")
+    local req_parts=("${required//./ }")
 
     local ver_num=$((${ver_parts[0]:-0} * 10000 + ${ver_parts[1]:-0} * 100 + ${ver_parts[2]:-0}))
     local req_num=$((${req_parts[0]:-0} * 10000 + ${req_parts[1]:-0} * 100 + ${req_parts[2]:-0}))
@@ -424,13 +469,15 @@ build_loop_context() {
 
     # Extract incomplete tasks from @fix_plan.md
     if [[ -f "@fix_plan.md" ]]; then
-        local incomplete_tasks=$(grep -c "^- \[ \]" "@fix_plan.md" 2>/dev/null || echo "0")
+        local incomplete_tasks
+        incomplete_tasks=$(grep -c "^- \[ \]" "@fix_plan.md" 2>/dev/null || echo "0")
         context+="Remaining tasks: ${incomplete_tasks}. "
     fi
 
     # Add circuit breaker state
     if [[ -f ".circuit_breaker_state" ]]; then
-        local cb_state=$(jq -r '.state // "UNKNOWN"' .circuit_breaker_state 2>/dev/null)
+        local cb_state
+        cb_state=$(jq -r '.state // "UNKNOWN"' .circuit_breaker_state 2>/dev/null)
         if [[ "$cb_state" != "CLOSED" && "$cb_state" != "null" && -n "$cb_state" ]]; then
             context+="Circuit breaker: ${cb_state}. "
         fi
@@ -438,7 +485,8 @@ build_loop_context() {
 
     # Add previous loop summary (truncated)
     if [[ -f ".response_analysis" ]]; then
-        local prev_summary=$(jq -r '.analysis.work_summary // ""' .response_analysis 2>/dev/null | head -c 200)
+        local prev_summary
+        prev_summary=$(jq -r '.analysis.work_summary // ""' .response_analysis 2>/dev/null | head -c 200)
         if [[ -n "$prev_summary" && "$prev_summary" != "null" ]]; then
             context+="Previous: ${prev_summary}"
         fi
@@ -451,7 +499,8 @@ build_loop_context() {
 # Initialize or resume Claude session
 init_claude_session() {
     if [[ -f "$CLAUDE_SESSION_FILE" ]]; then
-        local session_id=$(cat "$CLAUDE_SESSION_FILE" 2>/dev/null)
+        local session_id
+        session_id=$(cat "$CLAUDE_SESSION_FILE" 2>/dev/null)
         if [[ -n "$session_id" ]]; then
             log_status "INFO" "Resuming Claude session: ${session_id:0:20}..."
             echo "$session_id"
@@ -469,7 +518,8 @@ save_claude_session() {
 
     # Try to extract session ID from JSON output
     if [[ -f "$output_file" ]]; then
-        local session_id=$(jq -r '.metadata.session_id // .session_id // empty' "$output_file" 2>/dev/null)
+        local session_id
+        session_id=$(jq -r '.metadata.session_id // .session_id // empty' "$output_file" 2>/dev/null)
         if [[ -n "$session_id" && "$session_id" != "null" ]]; then
             echo "$session_id" > "$CLAUDE_SESSION_FILE"
             log_status "INFO" "Saved Claude session: ${session_id:0:20}..."
@@ -525,78 +575,101 @@ build_claude_command() {
 }
 
 # Main execution function
-execute_claude_code() {
-    local timestamp=$(date '+%Y-%m-%d_%H-%M-%S')
-    local output_file="$LOG_DIR/claude_output_${timestamp}.log"
+execute_ai_code() {
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d_%H-%M-%S')
+    local output_file="$LOG_DIR/${AI_PROVIDER}_output_${timestamp}.log"
     local loop_count=$1
-    local calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
+    local calls_made
+    calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
     calls_made=$((calls_made + 1))
 
-    log_status "LOOP" "Executing Claude Code (Call $calls_made/$MAX_CALLS_PER_HOUR)"
+    # Get provider display name
+    local provider_name="Claude Code"
+    if [[ "$AI_PROVIDER" == "copilot" ]]; then
+        provider_name="GitHub Copilot"
+    elif [[ "$AI_PROVIDER" == "opencode" ]]; then
+        provider_name="opencode"
+    fi
+
+    log_status "LOOP" "Executing $provider_name (Call $calls_made/$MAX_CALLS_PER_HOUR)"
     local timeout_seconds=$((CLAUDE_TIMEOUT_MINUTES * 60))
-    log_status "INFO" "⏳ Starting Claude Code execution... (timeout: ${CLAUDE_TIMEOUT_MINUTES}m)"
+    log_status "INFO" "⏳ Starting $provider_name execution... (timeout: ${CLAUDE_TIMEOUT_MINUTES}m)"
 
     # Build loop context for session continuity
     local loop_context=""
-    if [[ "$CLAUDE_USE_CONTINUE" == "true" ]]; then
+    if [[ "$CLAUDE_USE_CONTINUE" == "true" && "$AI_PROVIDER" == "claude" ]]; then
         loop_context=$(build_loop_context "$loop_count")
         if [[ -n "$loop_context" && "$VERBOSE_PROGRESS" == "true" ]]; then
             log_status "INFO" "Loop context: $loop_context"
         fi
     fi
 
-    # Initialize or resume session
+    # Initialize or resume session (Claude only)
     local session_id=""
-    if [[ "$CLAUDE_USE_CONTINUE" == "true" ]]; then
+    if [[ "$CLAUDE_USE_CONTINUE" == "true" && "$AI_PROVIDER" == "claude" ]]; then
         session_id=$(init_claude_session)
     fi
 
-    # Build the Claude CLI command with modern flags
-    # Note: We use the modern --prompt-file approach when CLAUDE_OUTPUT_FORMAT is "json"
-    # For backward compatibility, fall back to stdin piping for text mode
+    # Execute based on provider
     local use_modern_cli=false
+    local ai_pid=""
 
-    if [[ "$CLAUDE_OUTPUT_FORMAT" == "json" ]]; then
-        # Modern approach: use CLI flags (builds CLAUDE_CMD_ARGS array)
-        build_claude_command "$PROMPT_FILE" "$loop_context" "$session_id"
-        use_modern_cli=true
-        log_status "INFO" "Using modern CLI mode (JSON output)"
-    else
-        log_status "INFO" "Using legacy CLI mode (text output)"
-    fi
+    case "$AI_PROVIDER" in
+        claude)
+            # Build the Claude CLI command with modern flags
+            if [[ "$CLAUDE_OUTPUT_FORMAT" == "json" ]]; then
+                build_claude_command "$PROMPT_FILE" "$loop_context" "$session_id"
+                use_modern_cli=true
+                log_status "INFO" "Using modern CLI mode (JSON output)"
+            else
+                log_status "INFO" "Using legacy CLI mode (text output)"
+            fi
 
-    # Execute Claude Code
-    if [[ "$use_modern_cli" == "true" ]]; then
-        # Modern execution with command array (shell-injection safe)
-        # Execute array directly without bash -c to prevent shell metacharacter interpretation
-        if timeout ${timeout_seconds}s "${CLAUDE_CMD_ARGS[@]}" > "$output_file" 2>&1 &
-        then
-            :  # Continue to wait loop
-        else
-            log_status "ERROR" "❌ Failed to start Claude Code process (modern mode)"
-            # Fall back to legacy mode
-            log_status "INFO" "Falling back to legacy mode..."
-            use_modern_cli=false
-        fi
-    fi
+            # Execute Claude Code
+            if [[ "$use_modern_cli" == "true" ]]; then
+                if timeout "${timeout_seconds}s" "${CLAUDE_CMD_ARGS[@]}" > "$output_file" 2>&1 &
+                then
+                    ai_pid=$!
+                else
+                    log_status "ERROR" "❌ Failed to start $provider_name process (modern mode)"
+                    log_status "INFO" "Falling back to legacy mode..."
+                    use_modern_cli=false
+                fi
+            fi
 
-    # Fall back to legacy stdin piping if modern mode failed or not enabled
-    if [[ "$use_modern_cli" == "false" ]]; then
-        if timeout ${timeout_seconds}s $CLAUDE_CODE_CMD < "$PROMPT_FILE" > "$output_file" 2>&1 &
-        then
-            :  # Continue to wait loop
-        else
-            log_status "ERROR" "❌ Failed to start Claude Code process"
+            if [[ "$use_modern_cli" == "false" ]]; then
+                if timeout ${timeout_seconds}s $CLAUDE_CODE_CMD < "$PROMPT_FILE" > "$output_file" 2>&1 &
+                then
+                    ai_pid=$!
+                else
+                    log_status "ERROR" "❌ Failed to start $provider_name process"
+                    return 1
+                fi
+            fi
+            ;;
+        copilot)
+            log_status "INFO" "Using GitHub Copilot CLI"
+            # Execute via AI provider abstraction
+            execute_ai_command "copilot" "$PROMPT_FILE" "$output_file" "$timeout_seconds" "$loop_context" &
+            ai_pid=$!
+            ;;
+        opencode)
+            log_status "INFO" "Using opencode CLI"
+            execute_ai_command "opencode" "$PROMPT_FILE" "$output_file" "$timeout_seconds" "$loop_context" "" "" "$CLAUDE_USE_CONTINUE" &
+            ai_pid=$!
+            ;;
+        *)
+            log_status "ERROR" "❌ Unknown AI provider: $AI_PROVIDER"
             return 1
-        fi
-    fi
+            ;;
+    esac
 
     # Get PID and monitor progress
-    local claude_pid=$!
     local progress_counter=0
 
-    # Show progress while Claude Code is running
-    while kill -0 $claude_pid 2>/dev/null; do
+    # Show progress while AI is running
+    while kill -0 $ai_pid 2>/dev/null; do
         progress_counter=$((progress_counter + 1))
         case $((progress_counter % 4)) in
             1) progress_indicator="⠋" ;;
@@ -615,6 +688,7 @@ execute_claude_code() {
         cat > "$PROGRESS_FILE" << EOF
 {
     "status": "executing",
+    "provider": "$AI_PROVIDER",
     "indicator": "$progress_indicator",
     "elapsed_seconds": $((progress_counter * 10)),
     "last_output": "$last_line",
@@ -625,9 +699,9 @@ EOF
         # Only log if verbose mode is enabled
         if [[ "$VERBOSE_PROGRESS" == "true" ]]; then
             if [[ -n "$last_line" ]]; then
-                log_status "INFO" "$progress_indicator Claude Code: $last_line... (${progress_counter}0s)"
+                log_status "INFO" "$progress_indicator $provider_name: $last_line... (${progress_counter}0s)"
             else
-                log_status "INFO" "$progress_indicator Claude Code working... (${progress_counter}0s elapsed)"
+                log_status "INFO" "$progress_indicator $provider_name working... (${progress_counter}0s elapsed)"
             fi
         fi
 
@@ -635,7 +709,7 @@ EOF
     done
 
     # Wait for the process to finish and get exit code
-    wait $claude_pid
+    wait $ai_pid
     local exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
@@ -643,9 +717,9 @@ EOF
         echo "$calls_made" > "$CALL_COUNT_FILE"
 
         # Clear progress file
-        echo '{"status": "completed", "timestamp": "'$(date '+%Y-%m-%d %H:%M:%S')'"}' > "$PROGRESS_FILE"
+        echo '{"status": "completed", "provider": "'"$AI_PROVIDER"'", "timestamp": "'"$(date '+%Y-%m-%d %H:%M:%S')"'"}' > "$PROGRESS_FILE"
 
-        log_status "SUCCESS" "✅ Claude Code execution completed successfully"
+        log_status "SUCCESS" "✅ $provider_name execution completed successfully"
 
         # Save session ID from JSON output (Phase 1.1)
         if [[ "$CLAUDE_USE_CONTINUE" == "true" ]]; then
@@ -653,7 +727,7 @@ EOF
         fi
 
         # Analyze the response
-        log_status "INFO" "🔍 Analyzing Claude Code response..."
+        log_status "INFO" "🔍 Analyzing $provider_name response..."
         analyze_response "$output_file" "$loop_count"
         local analysis_exit_code=$?
 
@@ -664,7 +738,8 @@ EOF
         log_analysis_summary
 
         # Get file change count for circuit breaker
-        local files_changed=$(git diff --name-only 2>/dev/null | wc -l || echo 0)
+        local files_changed
+        files_changed=$(git diff --name-only 2>/dev/null | wc -l || echo 0)
         local has_errors="false"
 
         # Two-stage error detection to avoid JSON field false positives
@@ -687,7 +762,8 @@ EOF
 
             log_status "WARN" "Errors detected in output, check: $output_file"
         fi
-        local output_length=$(wc -c < "$output_file" 2>/dev/null || echo 0)
+        local output_length
+        output_length=$(wc -c < "$output_file" 2>/dev/null || echo 0)
 
         # Record result in circuit breaker
         record_loop_result "$loop_count" "$files_changed" "$has_errors" "$output_length"
@@ -701,14 +777,14 @@ EOF
         return 0
     else
         # Clear progress file on failure
-        echo '{"status": "failed", "timestamp": "'$(date '+%Y-%m-%d %H:%M:%S')'"}' > "$PROGRESS_FILE"
+        echo '{"status": "failed", "provider": "'"$AI_PROVIDER"'", "timestamp": "'"$(date '+%Y-%m-%d %H:%M:%S')"'"}' > "$PROGRESS_FILE"
 
         # Check if the failure is due to API 5-hour limit
         if grep -qi "5.*hour.*limit\|limit.*reached.*try.*back\|usage.*limit.*reached" "$output_file"; then
-            log_status "ERROR" "🚫 Claude API 5-hour usage limit reached"
+            log_status "ERROR" "🚫 $provider_name API usage limit reached"
             return 2  # Special return code for API limit
         else
-            log_status "ERROR" "❌ Claude Code execution failed, check: $output_file"
+            log_status "ERROR" "❌ $provider_name execution failed, check: $output_file"
             return 1
         fi
     fi
@@ -729,8 +805,23 @@ loop_count=0
 
 # Main loop
 main() {
-    
-    log_status "SUCCESS" "🚀 Ralph loop starting with Claude Code"
+    # Validate AI provider is available
+    if ! check_provider_available "$AI_PROVIDER"; then
+        log_status "ERROR" "AI provider '$AI_PROVIDER' is not available on this system"
+        show_provider_install_help "$AI_PROVIDER"
+        exit 1
+    fi
+
+    # Get provider display name
+    local provider_display="Claude Code"
+    if [[ "$AI_PROVIDER" == "copilot" ]]; then
+        provider_display="GitHub Copilot"
+    elif [[ "$AI_PROVIDER" == "opencode" ]]; then
+        provider_display="opencode"
+    fi
+
+    log_status "SUCCESS" "🚀 Ralph loop starting with $provider_display"
+    log_status "INFO" "AI Provider: $AI_PROVIDER"
     log_status "INFO" "Max calls per hour: $MAX_CALLS_PER_HOUR"
     log_status "INFO" "Logs: $LOG_DIR/ | Docs: $DOCS_DIR/ | Status: $STATUS_FILE"
     
@@ -783,7 +874,8 @@ main() {
         fi
 
         # Check for graceful exit conditions
-        local exit_reason=$(should_exit_gracefully)
+        local exit_reason
+        exit_reason=$(should_exit_gracefully)
         if [[ "$exit_reason" != "" ]]; then
             log_status "SUCCESS" "🏁 Graceful exit triggered: $exit_reason"
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "graceful_exit" "completed" "$exit_reason"
@@ -797,11 +889,12 @@ main() {
         fi
         
         # Update status
-        local calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
+        local calls_made
+        calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
         update_status "$loop_count" "$calls_made" "executing" "running"
         
-        # Execute Claude Code
-        execute_claude_code "$loop_count"
+        # Execute AI Code (Claude or Copilot)
+        execute_ai_code "$loop_count"
         local exec_result=$?
         
         if [ $exec_result -eq 0 ]; then
@@ -828,7 +921,7 @@ main() {
             echo -e "\n${BLUE}Choose an option (1 or 2):${NC} "
             
             # Read user input with timeout
-            read -t 30 -n 1 user_choice
+            read -r -t 30 -n 1 user_choice
             echo  # New line after input
             
             if [[ "$user_choice" == "2" ]] || [[ -z "$user_choice" ]]; then
@@ -865,9 +958,11 @@ main() {
 # Help function
 show_help() {
     cat << HELPEOF
-Ralph Loop for Claude Code
+Ralph Loop - Autonomous AI Development Loop
 
 Usage: $0 [OPTIONS]
+
+Supports multiple AI providers: Claude Code and GitHub Copilot
 
 IMPORTANT: This command must be run from a Ralph project directory.
            Use 'ralph-setup project-name' to create a new project first.
@@ -879,14 +974,26 @@ Options:
     -s, --status            Show current status and exit
     -m, --monitor           Start with tmux session and live monitor (requires tmux)
     -v, --verbose           Show detailed progress updates during execution
-    -t, --timeout MIN       Set Claude Code execution timeout in minutes (default: $CLAUDE_TIMEOUT_MINUTES)
+    -t, --timeout MIN       Set AI execution timeout in minutes (default: $CLAUDE_TIMEOUT_MINUTES)
     --reset-circuit         Reset circuit breaker to CLOSED state
     --circuit-status        Show circuit breaker status and exit
 
-Modern CLI Options (Phase 1.1):
+AI Provider Options:
+    --provider PROVIDER     Select AI provider: claude, copilot, or opencode (default: $AI_PROVIDER)
+                           Can also be set via AI_PROVIDER environment variable
+    --list-providers        Show available AI providers and exit
+
+Claude-Specific Options:
     --output-format FORMAT  Set Claude output format: json or text (default: $CLAUDE_OUTPUT_FORMAT)
     --allowed-tools TOOLS   Comma-separated list of allowed tools (default: $CLAUDE_ALLOWED_TOOLS)
     --no-continue           Disable session continuity across loops
+
+GitHub Copilot Options:
+    --copilot-mode MODE     Copilot mode: suggest or explain (default: $COPILOT_MODE)
+    --copilot-type TYPE     Target type for suggest: shell, git, or gh (default: $COPILOT_TARGET_TYPE)
+
+opencode Options:
+    (uses --no-continue / OPENCODE_MODEL env var; see lib/ai_provider.sh)
 
 Files created:
     - $LOG_DIR/: All execution logs
@@ -896,15 +1003,22 @@ Files created:
 Example workflow:
     ralph-setup my-project     # Create project
     cd my-project             # Enter project directory
-    $0 --monitor             # Start Ralph with monitoring
+    $0 --monitor             # Start Ralph with monitoring (uses opencode by default)
+    $0 --provider claude     # Use Claude Code instead
+    $0 --provider copilot    # Use GitHub Copilot instead
 
 Examples:
     $0 --calls 50 --prompt my_prompt.md
     $0 --monitor             # Start with integrated tmux monitoring
     $0 --monitor --timeout 30   # 30-minute timeout for complex tasks
     $0 --verbose --timeout 5    # 5-minute timeout with detailed progress
-    $0 --output-format text     # Use legacy text output format
-    $0 --no-continue            # Disable session continuity
+    $0 --provider claude     # Use Claude Code instead of opencode
+    $0 --provider copilot    # Use GitHub Copilot instead
+    $0 --provider copilot --copilot-mode explain  # Use Copilot explain mode
+    $0 --provider copilot --copilot-type git      # Use Copilot for git commands
+    $0 --output-format text     # Use legacy text output format (Claude only)
+    $0 --no-continue            # Disable session continuity (Claude/opencode)
+    AI_PROVIDER=claude $0    # Set provider via environment variable
 
 HELPEOF
 }
@@ -983,6 +1097,40 @@ while [[ $# -gt 0 ]]; do
         --no-continue)
             CLAUDE_USE_CONTINUE=false
             shift
+            ;;
+        --provider)
+            if [[ -z "$2" ]]; then
+                echo "Error: --provider requires a value (claude, copilot, or opencode)"
+                exit 1
+            fi
+            if ! is_valid_provider "$2"; then
+                echo "Error: Invalid provider '$2'. Valid options: ${SUPPORTED_PROVIDERS[*]}"
+                exit 1
+            fi
+            AI_PROVIDER="$2"
+            shift 2
+            ;;
+        --list-providers)
+            show_available_providers
+            exit 0
+            ;;
+        --copilot-mode)
+            if [[ "$2" == "suggest" || "$2" == "explain" ]]; then
+                COPILOT_MODE="$2"
+            else
+                echo "Error: --copilot-mode must be 'suggest' or 'explain'"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --copilot-type)
+            if [[ "$2" == "shell" || "$2" == "git" || "$2" == "gh" ]]; then
+                COPILOT_TARGET_TYPE="$2"
+            else
+                echo "Error: --copilot-type must be 'shell', 'git', or 'gh'"
+                exit 1
+            fi
+            shift 2
             ;;
         *)
             echo "Unknown option: $1"

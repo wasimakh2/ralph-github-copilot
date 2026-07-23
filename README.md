@@ -1,15 +1,25 @@
-# Ralph for Claude Code
+# Ralph - Autonomous AI Development Loop
 
-![Version](https://img.shields.io/badge/version-0.9.1-blue)
+![Version](https://img.shields.io/badge/version-0.9.2-blue)
 ![Status](https://img.shields.io/badge/status-active%20development-yellow)
 ![Tests](https://img.shields.io/badge/tests-145%20passing-green)
 ![Coverage](https://img.shields.io/badge/coverage-informational-lightgrey)
 
 > **Autonomous AI development loop with intelligent exit detection and rate limiting**
+> 
+> **Now supports opencode, Claude Code, and GitHub Copilot!**
 
-Ralph is an implementation of the Geoffrey Huntley's technique for Claude Code that enables continuous autonomous development cycles he named after [Ralph Wiggum](https://ghuntley.com/ralph/). It enables continuous autonomous development cycles where Claude Code iteratively improves your project until completion, with built-in safeguards to prevent infinite loops and API overuse.
+Ralph is an implementation of the Geoffrey Huntley's technique for AI-powered code assistants that enables continuous autonomous development cycles he named after [Ralph Wiggum](https://ghuntley.com/ralph/). It enables continuous autonomous development cycles where your AI assistant iteratively improves your project until completion, with built-in safeguards to prevent infinite loops and API overuse.
 
 **Install once, use everywhere** - Ralph becomes a global command available in any directory.
+
+## Supported AI Providers
+
+| Provider | Status | Command |
+|----------|--------|-------|
+| **opencode** | ✅ Full Support | `ralph --provider opencode` (default) |
+| **Claude Code** | ✅ Full Support | `ralph --provider claude` |
+| **GitHub Copilot** | ✅ Supported | `ralph --provider copilot` |
 
 ## Project Status
 
@@ -18,6 +28,7 @@ Ralph is an implementation of the Geoffrey Huntley's technique for Claude Code t
 **Test Coverage**: 145 tests, 100% pass rate
 
 ### What's Working Now
+- **Multi-provider support: opencode (default), Claude Code, and GitHub Copilot**
 - Autonomous development loops with intelligent exit detection
 - Rate limiting with hourly reset (100 calls/hour, configurable)
 - Circuit breaker with advanced error detection (prevents runaway loops)
@@ -25,6 +36,7 @@ Ralph is an implementation of the Geoffrey Huntley's technique for Claude Code t
 - **JSON output format support with automatic fallback to text parsing**
 - **Session continuity with `--continue` flag for context preservation**
 - **Modern CLI flags: `--output-format`, `--allowed-tools`, `--no-continue`**
+- **Provider selection via `--provider` flag or `AI_PROVIDER` environment variable**
 - Multi-line error matching for accurate stuck loop detection
 - 5-hour API limit handling with user prompts
 - tmux integration for live monitoring
@@ -33,6 +45,15 @@ Ralph is an implementation of the Geoffrey Huntley's technique for Claude Code t
 - 145 passing tests across 7 test files
 
 ### Recent Improvements
+
+**v0.9.2 - Multi-Provider Support**
+- Added opencode support (now the default provider) alongside Claude Code and GitHub Copilot
+- New `--provider` flag to select AI provider (opencode, claude, or copilot)
+- `AI_PROVIDER` environment variable for default provider selection
+- `--list-providers` flag to show available AI providers
+- AI provider abstraction layer for easy future extensions
+- Updated install script with multi-provider detection
+- Full backward compatibility with existing Claude-based workflows
 
 **v0.9.1 - Modern CLI Commands (Phase 1.1)**
 - JSON output format support with `--output-format json` (default)
@@ -105,6 +126,24 @@ This adds `ralph`, `ralph-monitor`, and `ralph-setup` commands to your PATH.
 
 > **Note**: You only need to do this once per system. After installation, you can delete the cloned repository if desired.
 
+#### Windows / Git Bash
+
+Ralph runs on Windows via Git Bash (all scripts are bash-based). Two install options:
+
+**Option 1: PowerShell installer (recommended)**
+```powershell
+cd ralph-claude-code
+.\setup.ps1
+```
+
+**Option 2: Git Bash**
+```bash
+cd ralph-claude-code
+./install.sh
+```
+
+Both methods set up Ralph in `~/.ralph` and `~/.local/bin`. Git Bash must be installed: https://gitforwindows.org/
+
 ### Phase 2: Initialize New Projects (Per Project)
 
 For each new project you want Ralph to work on:
@@ -144,8 +183,19 @@ ralph --monitor
 Once Ralph is installed and your project is initialized:
 
 ```bash
-# Navigate to any Ralph project and run:
+# Navigate to any Ralph project and run with opencode (default):
 ralph --monitor              # Integrated tmux monitoring (recommended)
+
+# Or use Claude Code / GitHub Copilot instead:
+ralph --monitor --provider claude
+ralph --monitor --provider copilot
+
+# Set default provider via environment variable:
+export AI_PROVIDER=claude
+ralph --monitor
+
+# Check available providers:
+ralph --list-providers
 
 # Or use separate terminals:
 ralph                        # Terminal 1: Ralph loop
@@ -157,7 +207,7 @@ ralph-monitor               # Terminal 2: Live monitor dashboard
 Ralph operates on a simple but powerful cycle:
 
 1. **Read Instructions** - Loads `PROMPT.md` with your project requirements
-2. **Execute Claude Code** - Runs Claude Code with current context and priorities
+2. **Execute AI Assistant** - Runs opencode, Claude Code, or GitHub Copilot with current context and priorities
 3. **Track Progress** - Updates task lists and logs execution results
 4. **Evaluate Completion** - Checks for exit conditions and project completion signals
 5. **Repeat** - Continues until project is complete or limits are reached

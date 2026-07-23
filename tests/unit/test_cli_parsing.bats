@@ -53,6 +53,27 @@ EOF
 get_iso_timestamp() { date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S'; }
 get_epoch_timestamp() { date +%s; }
 EOF
+
+    cat > lib/ai_provider.sh << 'EOF'
+# AI Provider stub for testing
+SUPPORTED_PROVIDERS=("claude" "copilot" "opencode")
+AI_PROVIDER="${AI_PROVIDER:-opencode}"
+COPILOT_MODE="${COPILOT_MODE:-suggest}"
+COPILOT_TARGET_TYPE="${COPILOT_TARGET_TYPE:-shell}"
+is_valid_provider() {
+    local provider=$1
+    for p in "${SUPPORTED_PROVIDERS[@]}"; do
+        if [[ "$p" == "$provider" ]]; then return 0; fi
+    done
+    return 1
+}
+check_provider_available() { return 0; }
+show_available_providers() { echo "Available: claude, copilot, opencode"; }
+detect_available_providers() { echo "claude copilot opencode"; }
+get_provider_version() { echo "1.0.0"; }
+build_ai_command() { :; }
+execute_ai_command() { :; }
+EOF
 }
 
 teardown() {
@@ -358,4 +379,100 @@ EOF
     run bash "$RALPH_SCRIPT" -t 30 --help
 
     assert_success
+}
+
+# =============================================================================
+# AI PROVIDER FLAG TESTS
+# =============================================================================
+
+@test "--provider accepts 'opencode' (default provider)" {
+    run bash "$RALPH_SCRIPT" --provider opencode --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--provider accepts 'claude'" {
+    run bash "$RALPH_SCRIPT" --provider claude --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--provider accepts 'copilot'" {
+    run bash "$RALPH_SCRIPT" --provider copilot --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--provider rejects invalid value" {
+    run bash "$RALPH_SCRIPT" --provider bogus
+
+    assert_failure
+    [[ "$output" == *"Invalid provider"* ]]
+}
+
+# =============================================================================
+# GITHUB COPILOT CLI OPTION TESTS
+# =============================================================================
+
+@test "--copilot-mode accepts valid value 'suggest'" {
+    run bash "$RALPH_SCRIPT" --copilot-mode suggest --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--copilot-mode accepts valid value 'explain'" {
+    run bash "$RALPH_SCRIPT" --copilot-mode explain --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--copilot-mode rejects invalid value" {
+    run bash "$RALPH_SCRIPT" --copilot-mode invalid
+
+    assert_failure
+    [[ "$output" == *"Error:"* ]]
+    [[ "$output" == *"'suggest' or 'explain'"* ]]
+}
+
+@test "--copilot-type accepts valid value 'shell'" {
+    run bash "$RALPH_SCRIPT" --copilot-type shell --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--copilot-type accepts valid value 'git'" {
+    run bash "$RALPH_SCRIPT" --copilot-type git --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--copilot-type accepts valid value 'gh'" {
+    run bash "$RALPH_SCRIPT" --copilot-type gh --help
+
+    assert_success
+    [[ "$output" == *"Usage:"* ]]
+}
+
+@test "--copilot-type rejects invalid value" {
+    run bash "$RALPH_SCRIPT" --copilot-type invalid
+
+    assert_failure
+    [[ "$output" == *"Error:"* ]]
+    [[ "$output" == *"'shell', 'git', or 'gh'"* ]]
+}
+
+@test "Copilot options documented in help" {
+    run bash "$RALPH_SCRIPT" --help
+
+    assert_success
+    [[ "$output" == *"--copilot-mode"* ]]
+    [[ "$output" == *"--copilot-type"* ]]
+    [[ "$output" == *"GitHub Copilot"* ]]
 }

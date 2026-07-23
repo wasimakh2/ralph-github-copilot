@@ -73,7 +73,7 @@ display_status() {
         echo
     fi
     
-    # Claude Code Progress section
+    # AI Provider Progress section
     if [[ -f "progress.json" ]]; then
         local progress_data=$(cat "progress.json" 2>/dev/null)
         local progress_status=$(echo "$progress_data" | jq -r '.status // "idle"' 2>/dev/null || echo "idle")
@@ -82,8 +82,15 @@ display_status() {
             local indicator=$(echo "$progress_data" | jq -r '.indicator // "⠋"' 2>/dev/null || echo "⠋")
             local elapsed=$(echo "$progress_data" | jq -r '.elapsed_seconds // "0"' 2>/dev/null || echo "0")
             local last_output=$(echo "$progress_data" | jq -r '.last_output // ""' 2>/dev/null || echo "")
+            local provider=$(echo "$progress_data" | jq -r '.provider // "claude"' 2>/dev/null || echo "claude")
             
-            echo -e "${YELLOW}┌─ Claude Code Progress ──────────────────────────────────────────────────┐${NC}"
+            # Get provider display name
+            local provider_display="Claude Code"
+            if [[ "$provider" == "copilot" ]]; then
+                provider_display="GitHub Copilot"
+            fi
+            
+            echo -e "${YELLOW}┌─ ${provider_display} Progress ──────────────────────────────────────────────────┐${NC}"
             echo -e "${YELLOW}│${NC} Status:         ${indicator} Working (${elapsed}s elapsed)"
             if [[ -n "$last_output" && "$last_output" != "" ]]; then
                 # Truncate long output for display
